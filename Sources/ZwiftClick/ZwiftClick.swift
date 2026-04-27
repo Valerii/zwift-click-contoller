@@ -4,8 +4,88 @@ import CoreGraphics
 import CryptoKit
 import CryptoSwift
 import Foundation
+import AppKit
 
-// MARK: - Constants
+// MARK: - Key name map
+
+private let keyNames: [String: CGKeyCode] = [
+    "up":       126,
+    "down":     125,
+    "left":     123,
+    "right":    124,
+    "pageup":   116,
+    "pagedown": 121,
+    "space":    49,
+    "return":   36,
+    "tab":      48,
+    "escape":   53,
+    "f1":  122, "f2":  120, "f3":  99,  "f4":  118,
+    "f5":  96,  "f6":  97,  "f7":  98,  "f8":  100,
+    "f9":  101, "f10": 109, "f11": 103, "f12": 111,
+]
+
+private func keyCode(for name: String) -> CGKeyCode? {
+    keyNames[name.lowercased()]
+}
+
+// MARK: - JSON Config
+
+struct Config: Codable {
+    var tapPlus:       String  = "up"
+    var tapMinus:      String  = "down"
+    var holdPlus:      String  = "pageup"
+    var holdMinus:     String  = "pagedown"
+    var holdThreshold: Double  = 0.5
+    /// App name or bundle ID to watch. BLE connects when it launches, disconnects when it quits.
+    /// Set to null to stay connected regardless of running apps.
+    var watchApp:      String? = nil
+
+    var tapPlusKey:   CGKeyCode    { keyCode(for: tapPlus)   ?? 126 }
+    var tapMinusKey:  CGKeyCode    { keyCode(for: tapMinus)  ?? 125 }
+    var holdPlusKey:  CGKeyCode    { keyCode(for: holdPlus)  ?? 116 }
+    var holdMinusKey: CGKeyCode    { keyCode(for: holdMinus) ?? 121 }
+    var threshold:    TimeInterval { holdThreshold }
+
+    static let defaultPath = (NSHomeDirectory() as NSString)
+        .appendingPathComponent(".config/zwift-click/config.json")
+
+    static func load() -> Config {
+        let path = configPath()
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            print("No config at \(path) - using defaults. Run --write-config to create one.")
+            return Config()
+        }
+        do {
+            let cfg = try JSONDecoder().decode(Config.self, from: data)
+            print("Loaded config from \(path)")
+            return cfg
+        } catch {
+            print("Config parse error: \(error). Using defaults.")
+            return Config()
+        }
+    }
+
+    func write() throws {
+        let path = Config.configPath()
+        let dir  = (path as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(self)
+        try data.write(to: URL(fileURLWithPath: path))
+        print("Default config written to \(path)")
+    }
+
+    private static func configPath() -> String {
+        let args = CommandLine.arguments
+        if let idx = args.firstIndex(of: "--config"), args.index(after: idx) < args.endIndex {
+            return args[args.index(after: idx)]
+        }
+        return defaultPath
+    }
+}
+
+// MARK: - ZAP UUIDs
 
 private let zapServiceUUID = CBUUID(string: "00000001-19ca-4651-86e5-fa29dcdd09d1")
 private let zapAsyncUUID   = CBUUID(string: "00000002-19ca-4651-86e5-fa29dcdd09d1")
@@ -13,20 +93,12 @@ private let zapSyncRxUUID  = CBUUID(string: "00000003-19ca-4651-86e5-fa29dcdd09d
 private let zapSyncTxUUID  = CBUUID(string: "00000004-19ca-4651-86e5-fa29dcdd09d1")
 private let deviceName     = "Zwift Click"
 
-// Tap: up/down arrow. Hold (>0.5s): page up/page down.
-private let tapThreshold: TimeInterval = 0.5
-private let tapUpKey:     CGKeyCode    = 126   // arrow up
-private let tapDownKey:   CGKeyCode    = 125   // arrow down
-private let holdUpKey:    CGKeyCode    = 116   // page up
-private let holdDownKey:  CGKeyCode    = 121   // page down
-
 // MARK: - Crypto
 
 private struct ZapCrypto {
     let aesKey:   [UInt8]
     let ivPrefix: [UInt8]
 
-    // HKDF-SHA256: salt = devPubWire(64) + ourPubWire(64), info = ""
     init(sharedSecret: [UInt8], devPubWire: [UInt8], ourPubWire: [UInt8]) throws {
         let derived = try HKDF(password: sharedSecret,
                                salt: devPubWire + ourPubWire,
@@ -42,9 +114,8 @@ private struct ZapCrypto {
         let ctAndTag = Array(data[4...])
         let ct       = Array(ctAndTag.dropLast(4))
         let tag      = Array(ctAndTag.suffix(4))
-        let nonce    = ivPrefix + counter
         return try AES(key: aesKey,
-                       blockMode: CCM(iv: nonce, tagLength: 4, messageLength: ct.count),
+                       blockMode: CCM(iv: ivPrefix + counter, tagLength: 4, messageLength: ct.count),
                        padding: .noPadding).decrypt(ct + tag)
     }
 
@@ -67,69 +138,119 @@ private func checkAccessibility() {
     }
 }
 
-// MARK: - Button state tracker (hold detection)
+// MARK: - Hold detection
 
 private final class ButtonTracker {
     enum Action { case tap, hold }
-
     private var pressTime: Date?
     private var wasPressed = false
+    private let threshold: TimeInterval
 
-    // Call on every decrypted payload. Returns an action on the rising or falling edge.
+    init(threshold: TimeInterval) { self.threshold = threshold }
+
     func update(pressed: Bool) -> Action? {
         defer { wasPressed = pressed }
-
-        if pressed && !wasPressed {
-            // Rising edge - record press time
-            pressTime = Date()
-            return nil
-        }
-
+        if pressed && !wasPressed  { pressTime = Date(); return nil }
         if !pressed && wasPressed {
-            // Falling edge - determine tap vs hold
             let duration = Date().timeIntervalSince(pressTime ?? Date())
             pressTime = nil
-            return duration >= tapThreshold ? .hold : .tap
+            return duration >= threshold ? .hold : .tap
         }
-
         return nil
     }
 }
 
-// MARK: - Button event handler
+// MARK: - Button handler
 
 private final class ButtonHandler {
-    private let plusTracker  = ButtonTracker()
-    private let minusTracker = ButtonTracker()
+    private let plusTracker:  ButtonTracker
+    private let minusTracker: ButtonTracker
+    private let config: Config
+
+    init(config: Config) {
+        self.config       = config
+        self.plusTracker  = ButtonTracker(threshold: config.threshold)
+        self.minusTracker = ButtonTracker(threshold: config.threshold)
+    }
 
     func process(plaintext: [UInt8]) {
-        // Format: [0x37, 0x08, plusState, 0x10, minusState]  0=pressed 1=released
         guard plaintext.count >= 5, plaintext[0] == 0x37 else { return }
-
-        let plusPressed  = plaintext[2] == 0x00
-        let minusPressed = plaintext[4] == 0x00
-
-        if let action = plusTracker.update(pressed: plusPressed) {
+        if let action = plusTracker.update(pressed: plaintext[2] == 0x00) {
             switch action {
-            case .tap:
-                print("UP (tap) -> arrow up")
-                sendKey(tapUpKey)
-            case .hold:
-                print("UP (hold) -> page up")
-                sendKey(holdUpKey)
+            case .tap:  print("+ tap  -> \(config.tapPlus)");  sendKey(config.tapPlusKey)
+            case .hold: print("+ hold -> \(config.holdPlus)"); sendKey(config.holdPlusKey)
             }
         }
-
-        if let action = minusTracker.update(pressed: minusPressed) {
+        if let action = minusTracker.update(pressed: plaintext[4] == 0x00) {
             switch action {
-            case .tap:
-                print("DOWN (tap) -> arrow down")
-                sendKey(tapDownKey)
-            case .hold:
-                print("DOWN (hold) -> page down")
-                sendKey(holdDownKey)
+            case .tap:  print("- tap  -> \(config.tapMinus)");  sendKey(config.tapMinusKey)
+            case .hold: print("- hold -> \(config.holdMinus)"); sendKey(config.holdMinusKey)
             }
         }
+    }
+}
+
+// MARK: - App Watcher
+
+/// Watches for a target app (by name or bundle ID) launching and quitting.
+/// Calls `onLaunch` / `onQuit` on the main thread.
+final class AppWatcher {
+    private let target: String   // lowercased app name or bundle ID
+    private var observers: [NSObjectProtocol] = []
+    var onLaunch: (() -> Void)?
+    var onQuit:   (() -> Void)?
+
+    init(appNameOrBundleID: String) {
+        self.target = appNameOrBundleID.lowercased()
+    }
+
+    func start() {
+        let ws = NSWorkspace.shared.notificationCenter
+        observers.append(ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification,
+                                        object: nil, queue: .main) { [weak self] note in
+            self?.handle(note, event: .launch)
+        })
+        observers.append(ws.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
+                                        object: nil, queue: .main) { [weak self] note in
+            self?.handle(note, event: .quit)
+        })
+
+        // Fire immediately if the app is already running
+        if isTargetRunning() {
+            print("[\(target)] already running - connecting.")
+            onLaunch?()
+        } else {
+            print("Waiting for \(target) to launch...")
+        }
+    }
+
+    func stop() {
+        observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        observers.removeAll()
+    }
+
+    private enum Event { case launch, quit }
+
+    private func handle(_ note: Notification, event: Event) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              matches(app) else { return }
+        switch event {
+        case .launch:
+            print("[\(app.localizedName ?? target)] launched - connecting Zwift Click.")
+            onLaunch?()
+        case .quit:
+            print("[\(app.localizedName ?? target)] quit - disconnecting Zwift Click.")
+            onQuit?()
+        }
+    }
+
+    private func matches(_ app: NSRunningApplication) -> Bool {
+        (app.localizedName?.lowercased() == target) ||
+        (app.bundleIdentifier?.lowercased() == target)
+    }
+
+    private func isTargetRunning() -> Bool {
+        NSWorkspace.shared.runningApplications.contains { matches($0) }
     }
 }
 
@@ -143,17 +264,44 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
     private var crypto: ZapCrypto?
     private var pendingCCCD = 0
     private var handshakeSent = false
-    private let buttonHandler = ButtonHandler()
+    private let buttonHandler: ButtonHandler
 
-    override init() {
+    // When true the manager is allowed to scan/connect; when false it stays idle.
+    private var enabled = true
+
+    init(config: Config) {
+        self.buttonHandler = ButtonHandler(config: config)
         super.init()
-        central = CBCentralManager(delegate: self, queue: nil)
+        central = CBCentralManager(delegate: self, queue: .main)
+    }
+
+    // Called by AppWatcher when the watched app launches
+    func enable() {
+        guard !enabled else { return }
+        enabled = true
+        if central.state == .poweredOn { startScan() }
+    }
+
+    // Called by AppWatcher when the watched app quits
+    func disable() {
+        guard enabled else { return }
+        enabled = false
+        central.stopScan()
+        if let p = peripheral {
+            central.cancelPeripheralConnection(p)
+        }
+        reset()
+        print("BLE disabled - waiting for watched app to relaunch.")
     }
 
     // MARK: Central
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        guard central.state == .poweredOn else { return }
+        guard central.state == .poweredOn, enabled else { return }
+        startScan()
+    }
+
+    private func startScan() {
         print("Scanning for \(deviceName)...")
         central.scanForPeripherals(withServices: [zapServiceUUID])
     }
@@ -173,19 +321,22 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        print("Disconnected. Reconnecting...")
         reset()
-        central.scanForPeripherals(withServices: [zapServiceUUID])
+        guard enabled else { return }
+        print("Disconnected. Reconnecting...")
+        startScan()
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         reset()
-        central.scanForPeripherals(withServices: [zapServiceUUID])
+        guard enabled else { return }
+        startScan()
     }
 
     private func reset() {
         syncRxChar = nil; crypto = nil
         pendingCCCD = 0; handshakeSent = false
+        peripheral = nil
         privateKey = P256.KeyAgreement.PrivateKey()
     }
 
@@ -220,8 +371,7 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
         guard let syncRx = syncRxChar else { return }
         handshakeSent = true
         let pubWire = Array(privateKey.publicKey.x963Representation[1...])
-        let payload = Array("RideOn".utf8) + [0x01, 0x02] + pubWire
-        peripheral.writeValue(Data(payload), for: syncRx, type: .withResponse)
+        peripheral.writeValue(Data(Array("RideOn".utf8) + [0x01, 0x02] + pubWire), for: syncRx, type: .withResponse)
         print("Encrypted handshake sent.")
     }
 
@@ -232,15 +382,12 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard error == nil, let data = characteristic.value else { return }
         let bytes = [UInt8](data)
-
         switch characteristic.uuid {
         case zapSyncTxUUID:
             handleHandshakeResponse(bytes)
         case zapAsyncUUID:
             guard let crypto else { return }
-            if let plain = try? crypto.decrypt(bytes) {
-                buttonHandler.process(plaintext: plain)
-            }
+            if let plain = try? crypto.decrypt(bytes) { buttonHandler.process(plaintext: plain) }
         default: break
         }
     }
@@ -253,11 +400,10 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
             let devPubKey    = try P256.KeyAgreement.PublicKey(x963Representation: Data([0x04] + devPubWire))
             let sharedSecret = try privateKey.sharedSecretFromKeyAgreement(with: devPubKey)
             let ssBytes      = sharedSecret.withUnsafeBytes { Array($0) }
-            let ourPubWire   = Array(privateKey.publicKey.x963Representation[1...])
-            crypto = try ZapCrypto(sharedSecret: ssBytes, devPubWire: devPubWire, ourPubWire: ourPubWire)
-            print("Key exchange complete. Press + or - on your Zwift Click.")
-            print("  tap  -> arrow up / arrow down")
-            print("  hold -> page up  / page down")
+            crypto = try ZapCrypto(sharedSecret: ssBytes,
+                                   devPubWire: devPubWire,
+                                   ourPubWire: Array(privateKey.publicKey.x963Representation[1...]))
+            print("Ready. Listening for button events.")
         } catch {
             print("Key exchange failed: \(error)")
         }
@@ -269,9 +415,27 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
 @main
 struct ZwiftClick {
     static func main() {
+        if CommandLine.arguments.contains("--write-config") {
+            try? Config().write()
+            return
+        }
+
+        let config = Config.load()
         checkAccessibility()
-        let manager = ZwiftClickManager()
-        _ = manager
-        RunLoop.main.run()
+
+        let manager = ZwiftClickManager(config: config)
+
+        if let appTarget = config.watchApp {
+            // Start disabled - AppWatcher will enable/disable based on the watched app
+            manager.disable()
+            let watcher = AppWatcher(appNameOrBundleID: appTarget)
+            watcher.onLaunch = { manager.enable() }
+            watcher.onQuit   = { manager.disable() }
+            watcher.start()
+            // Keep watcher alive
+            withExtendedLifetime(watcher) { RunLoop.main.run() }
+        } else {
+            RunLoop.main.run()
+        }
     }
 }
