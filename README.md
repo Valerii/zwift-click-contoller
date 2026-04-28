@@ -78,28 +78,36 @@ Edit this file to change key assignments and behavior.
 ### Available key names
 
 ```
-up, down, left, right, pageup, pagedown, space, return, tab, escape,
+up, down, left, right, pageup, pagedown, space, return, tab, escape
 f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12
+a, b, c, d, e, f, g, h, i, j, k, l, m,
+n, o, p, q, r, s, t, u, v, w, x, y, z
 ```
 
-### Example: MyWhoosh config
+### Example: MyWhoosh Indoor Cycling App
 
-MyWhoosh uses Page Up / Page Down for gear shifting. To connect only when MyWhoosh is running:
+The config below connects only when MyWhoosh is running. `k` shifts up, `i` shifts down (matching MyWhoosh's default keyboard shortcuts). Hold either button for Page Up / Page Down as a fallback.
 
 ```json
 {
-  "tapPlus": "pageup",
-  "tapMinus": "pagedown",
-  "holdPlus": "f1",
-  "holdMinus": "f2",
+  "tapPlus": "k",
+  "tapMinus": "i",
+  "holdPlus": "pageup",
+  "holdMinus": "pagedown",
   "holdThreshold": 0.5,
-  "watchApp": "MyWhoosh"
+  "watchApp": "com.whoosh.whooshgame"
 }
 ```
 
+To verify the bundle ID on a machine where MyWhoosh is installed, run:
+
+```
+osascript -e 'id of app "MyWhoosh"'
+```
+
 The `watchApp` field accepts either:
+- The app's bundle ID (recommended), e.g. `"com.whoosh.whooshgame"`
 - The app's display name, e.g. `"MyWhoosh"` or `"Zwift"`
-- The app's bundle ID, e.g. `"com.whoosh.MyWhoosh"`
 
 When `watchApp` is set, ZwiftClick will:
 - Wait idle on launch until the target app opens
