@@ -125,67 +125,45 @@ ZwiftClick --config /path/to/my-config.json
 
 ---
 
-## Running as a LaunchAgent (start on login)
+## Install as a LaunchAgent (start on login)
 
-A LaunchAgent runs ZwiftClick silently in the background every time you log in - no terminal required. It will sit idle until MyWhoosh (or your configured app) launches.
+A LaunchAgent runs ZwiftClick silently in the background every time you log in - no terminal required. It will sit idle until your configured app launches.
 
-### 1. Install the binary
+### Install
 
-```
-cp .build/release/ZwiftClick /usr/local/bin/ZwiftClick
-```
-
-### 2. Create the LaunchAgent plist
-
-Create the file `~/Library/LaunchAgents/com.zwiftclick.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.zwiftclick</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/ZwiftClick</string>
-    </array>
-
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>KeepAlive</key>
-    <true/>
-
-    <key>StandardOutPath</key>
-    <string>/tmp/zwift-click.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>/tmp/zwift-click.log</string>
-</dict>
-</plist>
-```
-
-### 3. Load the agent
+Run the install script from the project directory:
 
 ```
-launchctl load ~/Library/LaunchAgents/com.zwiftclick.plist
+./install.sh
 ```
 
-### 4. Grant Accessibility permission to the binary
+This will:
+1. Build the release binary
+2. Copy it to `/usr/local/bin/ZwiftClick`
+3. Create a default config at `~/.config/zwift-click/config.json` (if one doesn't exist)
+4. Write the LaunchAgent plist to `~/Library/LaunchAgents/com.zwiftclick.plist`
+5. Load and start the agent immediately
 
-Go to **System Settings > Privacy & Security > Accessibility**, click `+`, and add `/usr/local/bin/ZwiftClick`.
+### Grant Accessibility permission
+
+After installing, go to **System Settings > Privacy & Security > Accessibility**, click `+`, and add `/usr/local/bin/ZwiftClick`. This is required for keyboard injection to work system-wide.
 
 ### Managing the LaunchAgent
 
 | Action | Command |
 |---|---|
-| Start | `launchctl load ~/Library/LaunchAgents/com.zwiftclick.plist` |
-| Stop | `launchctl unload ~/Library/LaunchAgents/com.zwiftclick.plist` |
 | View logs | `tail -f /tmp/zwift-click.log` |
-| Restart after config change | `launchctl unload ... && launchctl load ...` |
+| Restart after config change | `launchctl unload ~/Library/LaunchAgents/com.zwiftclick.plist && launchctl load ~/Library/LaunchAgents/com.zwiftclick.plist` |
+| Stop | `launchctl unload ~/Library/LaunchAgents/com.zwiftclick.plist` |
+| Start | `launchctl load ~/Library/LaunchAgents/com.zwiftclick.plist` |
+
+### Uninstall
+
+```
+./uninstall.sh
+```
+
+This stops the agent, removes the plist, and deletes the binary. Your config file is left in place.
 
 ---
 
