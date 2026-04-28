@@ -195,6 +195,40 @@ Press `Ctrl+C` to quit.
 
 ---
 
+## Known Behavior
+
+### Zwift Click not found after 1 minute
+
+If the app scans for more than 1 minute without finding the device, it logs a warning every minute with the elapsed time and the most common causes:
+
+```
+⚠️  Still searching for Zwift Click (60s elapsed).
+   Possible reasons:
+   - The Zwift Click is off or out of range. Press a button to wake it up.
+   - The Zwift Click is already connected to another device (phone, tablet, or another instance of this app).
+     Disconnect it from the other device, or quit any other ZwiftClick instance.
+   - Bluetooth is blocked by system policy or another process.
+   Still scanning...
+```
+
+The app keeps scanning indefinitely - it will connect as soon as the device becomes available.
+
+### Two instances of ZwiftClick running
+
+BLE does not allow two hosts to connect to the same peripheral simultaneously. If ZwiftClick is already running (e.g. as a LaunchAgent) and you start a second instance, the second one will scan indefinitely and trigger the 2-minute warning above. Check for a running instance with:
+
+```
+pgrep -l ZwiftClick
+```
+
+Stop the LaunchAgent instance before running manually:
+
+```
+launchctl unload ~/Library/LaunchAgents/com.zwiftclick.plist
+```
+
+---
+
 ## How it works
 
 The Zwift Click communicates over BLE using the Zwift Accessory Protocol (ZAP). Current firmware requires a full encrypted handshake:

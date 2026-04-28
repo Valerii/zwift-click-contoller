@@ -289,6 +289,10 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
     // When true the manager is allowed to scan/connect; when false it stays idle.
     private var enabled = true
 
+    private var scanStartTime: Date?
+    private var scanWarningTimer: Timer?
+    private let scanWarningInterval: TimeInterval = 60
+
     init(config: Config) {
         self.buttonHandler = ButtonHandler(config: config)
         super.init()
@@ -307,6 +311,7 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
         guard enabled else { return }
         enabled = false
         central.stopScan()
+        stopScanWarning()
         if let p = peripheral {
             central.cancelPeripheralConnection(p)
         }
@@ -323,7 +328,28 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
 
     private func startScan() {
         print("Scanning for \(deviceName)...")
+        scanStartTime = Date()
         central.scanForPeripherals(withServices: [zapServiceUUID])
+        scanWarningTimer?.invalidate()
+        scanWarningTimer = Timer.scheduledTimer(withTimeInterval: scanWarningInterval, repeats: true) { [weak self] _ in
+            guard let self, self.enabled else { return }
+            let elapsed = Int(Date().timeIntervalSince(self.scanStartTime ?? Date()))
+            print("")
+            print("⚠️  Still searching for \(deviceName) (\(elapsed)s elapsed).")
+            print("   Possible reasons:")
+            print("   - The Zwift Click is off or out of range. Press a button to wake it up.")
+            print("   - The Zwift Click is already connected to another device (phone, tablet, or another instance of this app).")
+            print("     Disconnect it from the other device, or quit any other ZwiftClick instance.")
+            print("   - Bluetooth is blocked by system policy or another process.")
+            print("   Still scanning...")
+            print("")
+        }
+    }
+
+    private func stopScanWarning() {
+        scanWarningTimer?.invalidate()
+        scanWarningTimer = nil
+        scanStartTime = nil
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
@@ -331,6 +357,7 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
         guard peripheral.name == deviceName else { return }
         self.peripheral = peripheral
         central.stopScan()
+        stopScanWarning()
         central.connect(peripheral)
         print("Found - connecting...")
     }
@@ -354,6 +381,7 @@ final class ZwiftClickManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
     }
 
     private func reset() {
+        stopScanWarning()
         syncRxChar = nil; crypto = nil
         pendingCCCD = 0; handshakeSent = false
         peripheral = nil
