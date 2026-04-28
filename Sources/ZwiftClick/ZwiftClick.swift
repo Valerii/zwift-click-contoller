@@ -41,7 +41,7 @@ struct Config: Codable {
     var tapMinus:      String  = "down"
     var holdPlus:      String  = "pageup"
     var holdMinus:     String  = "pagedown"
-    var holdThreshold: Double  = 0.5
+    var holdThreshold: Double  = 0.3
     /// App name or bundle ID to watch. BLE connects when it launches, disconnects when it quits.
     /// Set to null to stay connected regardless of running apps.
     var watchApp:      String? = nil
@@ -147,22 +147,42 @@ private func checkAccessibility() {
 // MARK: - Hold detection
 
 private final class ButtonTracker {
-    enum Action { case tap, hold }
+    var onTap:  (() -> Void)?
+    var onHold: (() -> Void)?  // called on first trigger and every 100ms repeat while held
+
     private var pressTime: Date?
-    private var wasPressed = false
-    private let threshold: TimeInterval
+    private var wasPressed    = false
+    private let threshold:     TimeInterval
+    private let repeatInterval = 0.1
+    private var holdTimer:     Timer?
+    private var repeatTimer:   Timer?
 
     init(threshold: TimeInterval) { self.threshold = threshold }
 
-    func update(pressed: Bool) -> Action? {
+    func update(pressed: Bool) {
         defer { wasPressed = pressed }
-        if pressed && !wasPressed  { pressTime = Date(); return nil }
+
+        if pressed && !wasPressed {
+            // Rising edge: arm the hold timer
+            pressTime = Date()
+            holdTimer = Timer.scheduledTimer(withTimeInterval: threshold, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                self.onHold?()
+                self.repeatTimer = Timer.scheduledTimer(withTimeInterval: self.repeatInterval,
+                                                        repeats: true) { [weak self] _ in
+                    self?.onHold?()
+                }
+            }
+        }
+
         if !pressed && wasPressed {
+            // Falling edge: cancel timers, fire tap if threshold wasn't reached
             let duration = Date().timeIntervalSince(pressTime ?? Date())
             pressTime = nil
-            return duration >= threshold ? .hold : .tap
+            holdTimer?.invalidate();  holdTimer  = nil
+            repeatTimer?.invalidate(); repeatTimer = nil
+            if duration < threshold { onTap?() }
         }
-        return nil
     }
 }
 
@@ -171,28 +191,22 @@ private final class ButtonTracker {
 private final class ButtonHandler {
     private let plusTracker:  ButtonTracker
     private let minusTracker: ButtonTracker
-    private let config: Config
 
     init(config: Config) {
-        self.config       = config
-        self.plusTracker  = ButtonTracker(threshold: config.threshold)
-        self.minusTracker = ButtonTracker(threshold: config.threshold)
+        plusTracker  = ButtonTracker(threshold: config.threshold)
+        minusTracker = ButtonTracker(threshold: config.threshold)
+
+        plusTracker.onTap  = { print("+ tap  -> \(config.tapPlus)");  sendKey(config.tapPlusKey) }
+        plusTracker.onHold = { print("+ hold -> \(config.holdPlus)"); sendKey(config.holdPlusKey) }
+
+        minusTracker.onTap  = { print("- tap  -> \(config.tapMinus)");  sendKey(config.tapMinusKey) }
+        minusTracker.onHold = { print("- hold -> \(config.holdMinus)"); sendKey(config.holdMinusKey) }
     }
 
     func process(plaintext: [UInt8]) {
         guard plaintext.count >= 5, plaintext[0] == 0x37 else { return }
-        if let action = plusTracker.update(pressed: plaintext[2] == 0x00) {
-            switch action {
-            case .tap:  print("+ tap  -> \(config.tapPlus)");  sendKey(config.tapPlusKey)
-            case .hold: print("+ hold -> \(config.holdPlus)"); sendKey(config.holdPlusKey)
-            }
-        }
-        if let action = minusTracker.update(pressed: plaintext[4] == 0x00) {
-            switch action {
-            case .tap:  print("- tap  -> \(config.tapMinus)");  sendKey(config.tapMinusKey)
-            case .hold: print("- hold -> \(config.holdMinus)"); sendKey(config.holdMinusKey)
-            }
-        }
+        plusTracker.update(pressed:  plaintext[2] == 0x00)
+        minusTracker.update(pressed: plaintext[4] == 0x00)
     }
 }
 
