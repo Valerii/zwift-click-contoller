@@ -41,7 +41,8 @@ struct Config: Codable {
     var tapMinus:      String  = "down"
     var holdPlus:      String  = "pageup"
     var holdMinus:     String  = "pagedown"
-    var holdThreshold: Double  = 0.3
+    var holdThreshold:       Double = 0.3
+    var holdRepeatInterval:  Double = 0.2
     /// App name or bundle ID to watch. BLE connects when it launches, disconnects when it quits.
     /// Set to null to stay connected regardless of running apps.
     var watchApp:      String? = nil
@@ -50,7 +51,8 @@ struct Config: Codable {
     var tapMinusKey:  CGKeyCode    { keyCode(for: tapMinus)  ?? 125 }
     var holdPlusKey:  CGKeyCode    { keyCode(for: holdPlus)  ?? 116 }
     var holdMinusKey: CGKeyCode    { keyCode(for: holdMinus) ?? 121 }
-    var threshold:    TimeInterval { holdThreshold }
+    var threshold:      TimeInterval { holdThreshold }
+    var repeatInterval: TimeInterval { holdRepeatInterval }
 
     static let defaultPath = (NSHomeDirectory() as NSString)
         .appendingPathComponent(".config/zwift-click/config.json")
@@ -151,13 +153,16 @@ private final class ButtonTracker {
     var onHold: (() -> Void)?  // called on first trigger and every 100ms repeat while held
 
     private var pressTime: Date?
-    private var wasPressed    = false
-    private let threshold:     TimeInterval
-    private let repeatInterval = 0.1
-    private var holdTimer:     Timer?
-    private var repeatTimer:   Timer?
+    private var wasPressed     = false
+    private let threshold:      TimeInterval
+    private let repeatInterval: TimeInterval
+    private var holdTimer:      Timer?
+    private var repeatTimer:    Timer?
 
-    init(threshold: TimeInterval) { self.threshold = threshold }
+    init(threshold: TimeInterval, repeatInterval: TimeInterval) {
+        self.threshold      = threshold
+        self.repeatInterval = repeatInterval
+    }
 
     func update(pressed: Bool) {
         defer { wasPressed = pressed }
@@ -193,8 +198,8 @@ private final class ButtonHandler {
     private let minusTracker: ButtonTracker
 
     init(config: Config) {
-        plusTracker  = ButtonTracker(threshold: config.threshold)
-        minusTracker = ButtonTracker(threshold: config.threshold)
+        plusTracker  = ButtonTracker(threshold: config.threshold, repeatInterval: config.repeatInterval)
+        minusTracker = ButtonTracker(threshold: config.threshold, repeatInterval: config.repeatInterval)
 
         plusTracker.onTap  = { print("+ tap  -> \(config.tapPlus)");  sendKey(config.tapPlusKey) }
         plusTracker.onHold = { print("+ hold -> \(config.holdPlus)"); sendKey(config.holdPlusKey) }

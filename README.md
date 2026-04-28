@@ -55,6 +55,7 @@ This creates `~/.config/zwift-click/config.json`:
 {
   "holdMinus": "pagedown",
   "holdPlus": "pageup",
+  "holdRepeatInterval": 0.2,
   "holdThreshold": 0.3,
   "tapMinus": "down",
   "tapPlus": "up",
@@ -73,6 +74,7 @@ Edit this file to change key assignments and behavior.
 | `holdPlus` | `"pageup"` | Key sent on long press of `+` |
 | `holdMinus` | `"pagedown"` | Key sent on long press of `-` |
 | `holdThreshold` | `0.3` | Seconds before a press is considered a hold |
+| `holdRepeatInterval` | `0.2` | Seconds between repeated key events while holding |
 | `watchApp` | `null` | App name or bundle ID to watch (see below) |
 
 ### Available key names
@@ -95,6 +97,7 @@ The config below connects only when MyWhoosh is running. `k` shifts up, `i` shif
   "holdPlus": "k",
   "holdMinus": "i",
   "holdThreshold": 0.3,
+  "holdRepeatInterval": 0.2,
   "watchApp": "com.whoosh.whooshgame"
 }
 ```
