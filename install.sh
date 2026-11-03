@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BINARY_NAME="ZwiftClick"
+BINARY_NAME="ZwiftClickV2"
 INSTALL_PATH="/usr/local/bin/$BINARY_NAME"
-PLIST_LABEL="com.zwiftclick"
+PLIST_LABEL="com.zwiftclickv2"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
-CONFIG_PATH="$HOME/.config/zwift-click/config.json"
-LOG_PATH="/tmp/zwift-click.log"
+CONFIG_PATH="$HOME/.config/zwift-click-v2/config.json"
+LOG_PATH="/tmp/zwift-click-v2.log"
 
 # ── 1. Build ──────────────────────────────────────────────────────────────────
 echo "Building $BINARY_NAME..."
@@ -15,6 +15,7 @@ echo "Build complete."
 
 # ── 2. Install binary ─────────────────────────────────────────────────────────
 echo "Installing binary to $INSTALL_PATH..."
+sudo mkdir -p "$(dirname "$INSTALL_PATH")"
 sudo cp ".build/release/$BINARY_NAME" "$INSTALL_PATH"
 sudo chmod +x "$INSTALL_PATH"
 echo "Binary installed."
@@ -47,8 +48,12 @@ cat > "$PLIST_PATH" <<EOF
     <key>RunAtLoad</key>
     <true/>
 
+    <!-- Restart only after a crash. A normal exit (e.g. "already running") must not restart-loop. -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
 
     <key>StandardOutPath</key>
     <string>$LOG_PATH</string>
@@ -62,19 +67,19 @@ echo "Plist written."
 
 # ── 5. Reload LaunchAgent ─────────────────────────────────────────────────────
 echo "Loading LaunchAgent..."
-# Unload first in case it was already loaded
 launchctl unload "$PLIST_PATH" 2>/dev/null || true
 launchctl load "$PLIST_PATH"
 echo "LaunchAgent loaded."
 
 # ── 6. Done ───────────────────────────────────────────────────────────────────
 echo ""
-echo "Done! ZwiftClick is now running in the background."
+echo "Done! $BINARY_NAME is now running in the background."
 echo ""
 echo "Next steps:"
 echo "  1. Edit your config:  open $CONFIG_PATH"
 echo "  2. Grant Accessibility permission to $INSTALL_PATH"
 echo "     System Settings > Privacy & Security > Accessibility > (+) $INSTALL_PATH"
+echo "     (re-add it after every reinstall - a rebuilt binary counts as a new app)"
 echo "  3. After editing config, restart:"
 echo "     launchctl unload $PLIST_PATH && launchctl load $PLIST_PATH"
 echo "  4. View logs: tail -f $LOG_PATH"
