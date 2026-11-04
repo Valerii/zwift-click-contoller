@@ -1,9 +1,16 @@
 import Foundation
 
+/// Turns a button's pressed/released reports into key presses.
+public protocol ButtonHandler: AnyObject {
+    func update(pressed: Bool)
+    /// Stops whatever the button is doing (controller disconnected, app disabled or quitting).
+    func release()
+}
+
 /// Tap vs. hold detection for one button. Must be driven from the main run loop.
 /// - Released before `threshold`: `onTap` once.
 /// - Held past `threshold`: `onHold` once, then every `repeatInterval` until released.
-public final class ButtonTracker {
+public final class ButtonTracker: ButtonHandler {
     public var onTap:  (() -> Void)?
     public var onHold: (() -> Void)?
 

@@ -34,8 +34,8 @@ public final class ClickV2Manager: NSObject, CBCentralManagerDelegate, CBPeriphe
 
     private var central: CBCentralManager!
     private var devices: [DeviceKind: Device] = [:]
-    /// One tracker per device and button, so a Click v1 "+" and a Click v2 "+" never mix up presses.
-    private var trackers: [TrackerKey: ButtonTracker] = [:]
+    /// One handler per device and button, so a Click v1 "+" and a Click v2 "+" never mix up presses.
+    private var trackers: [TrackerKey: ButtonHandler] = [:]
     private var enabled: Bool
     /// Controllers enabled in the config. Anything else is ignored and never connected.
     private let kinds: Set<DeviceKind>
@@ -53,17 +53,28 @@ public final class ClickV2Manager: NSObject, CBCentralManagerDelegate, CBPeriphe
     private let missedRelaysBeforeWarning = 3
 
     public init(config: ResolvedConfig, startEnabled: Bool,
-                sendKey: @escaping (CGKeyCode) -> Void = KeyInjector.send) {
+                sendKey: @escaping (CGKeyCode) -> Void = KeyInjector.send,
+                postKey: @escaping (CGKeyCode, KeyEvent) -> Void = KeyInjector.post) {
         self.enabled = startEnabled
         self.kinds = config.kinds
         super.init()
 
         for kind in DeviceKind.allCases where kinds.contains(kind) {
             for button in kind.buttons {
-                let tracker = ButtonTracker(threshold: config.holdThreshold, repeatInterval: config.holdRepeatInterval)
                 let action = config.actions[button]
                 let label = button.rawValue.padding(toLength: 5, withPad: " ", startingAt: 0)
                 let tag = kind.logTag
+                let key = TrackerKey(kind: kind, button: button)
+
+                if let press = action?.press {
+                    let holder = KeyHolder { postKey(press.code, $0) }
+                    holder.onDown = { Log.info("\(tag) \(label) down -> \(press.name)") }
+                    holder.onUp = { Log.info("\(tag) \(label) up   (\(String(format: "%.1f", $0))s)") }
+                    trackers[key] = holder
+                    continue
+                }
+
+                let tracker = ButtonTracker(threshold: config.holdThreshold, repeatInterval: config.holdRepeatInterval)
                 if let tap = action?.tap {
                     tracker.onTap = { Log.info("\(tag) \(label) tap  -> \(tap.name)"); sendKey(tap.code) }
                 } else {
@@ -72,7 +83,7 @@ public final class ClickV2Manager: NSObject, CBCentralManagerDelegate, CBPeriphe
                 if let hold = action?.hold {
                     tracker.onHold = { Log.info("\(tag) \(label) hold -> \(hold.name)"); sendKey(hold.code) }
                 }
-                trackers[TrackerKey(kind: kind, button: button)] = tracker
+                trackers[key] = tracker
             }
         }
 

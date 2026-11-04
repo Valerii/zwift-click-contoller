@@ -1,14 +1,18 @@
 import CoreGraphics
 import Foundation
 
-/// Keys sent for one button. `hold` defaults to `tap` (auto-repeat while held).
+/// Keys sent for one button. Either:
+/// - `press`: the key is held down for as long as the button is (like a real keyboard key), or
+/// - `tap` / `hold`: a click on a short press; `hold` (defaults to `tap`) repeats while held.
 public struct ButtonAction: Codable, Equatable, Sendable {
     public var tap: String?
     public var hold: String?
+    public var press: String?
 
-    public init(tap: String?, hold: String? = nil) {
+    public init(tap: String? = nil, hold: String? = nil, press: String? = nil) {
         self.tap = tap
         self.hold = hold
+        self.press = press
     }
 }
 
@@ -26,10 +30,11 @@ public struct Config: Codable, Equatable {
     public static let defaultControllers = ["v1", "v2"]
 
     public static let defaultButtons: [String: ButtonAction] = [
-        "up":    ButtonAction(tap: "up"),
-        "down":  ButtonAction(tap: "down"),
-        "left":  ButtonAction(tap: "left"),
-        "right": ButtonAction(tap: "right"),
+        // Arrows act like held keyboard keys (e.g. steering keeps going while held).
+        "up":    ButtonAction(press: "up"),
+        "down":  ButtonAction(press: "down"),
+        "left":  ButtonAction(press: "left"),
+        "right": ButtonAction(press: "right"),
         "minus": ButtonAction(tap: "i", hold: "i"),
         "plus":  ButtonAction(tap: "k", hold: "k"),
         "a":     ButtonAction(tap: "return"),
@@ -132,9 +137,16 @@ public struct Config: Codable, Equatable {
                 return KeyAction(name: name.lowercased(), code: code)
             }
 
+            if let press = action.press {
+                if action.tap != nil || action.hold != nil {
+                    errors.append("buttons.\(button.rawValue): use either press or tap/hold, not both - using press")
+                }
+                actions[button] = ResolvedButton(tap: nil, hold: nil, press: key(press, "press"))
+                continue
+            }
             let tap = key(action.tap, "tap")
             let hold = action.hold == nil ? tap : key(action.hold, "hold")
-            actions[button] = ResolvedButton(tap: tap, hold: hold)
+            actions[button] = ResolvedButton(tap: tap, hold: hold, press: nil)
         }
 
         var threshold = holdThreshold
@@ -175,6 +187,8 @@ public struct KeyAction: Equatable, Sendable {
 public struct ResolvedButton: Equatable, Sendable {
     public let tap: KeyAction?
     public let hold: KeyAction?
+    /// Set for `press` mode, in which case `tap` and `hold` are nil.
+    public let press: KeyAction?
 }
 
 public struct ResolvedConfig: Equatable, Sendable {

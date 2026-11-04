@@ -317,6 +317,94 @@ private func pressed(_ hex: String, _ side: Side) -> Set<Button> {
     }
 }
 
+@Suite struct KeyHolderTests {
+    private final class Recorder {
+        var events: [KeyEvent] = []
+    }
+
+    private func holder(_ recorder: Recorder, delay: TimeInterval = 10, interval: TimeInterval = 10) -> KeyHolder {
+        KeyHolder(repeatDelay: delay, repeatInterval: interval) { recorder.events.append($0) }
+    }
+
+    @Test func pressAndReleaseLikeAKeyboardKey() {
+        let recorder = Recorder()
+        let key = holder(recorder)
+        key.update(pressed: true)
+        key.update(pressed: true) // duplicate report
+        #expect(recorder.events == [.down(isRepeat: false)])
+        key.update(pressed: false)
+        key.update(pressed: false)
+        #expect(recorder.events == [.down(isRepeat: false), .up])
+    }
+
+    @Test func releaseLiftsAHeldKey() {
+        let recorder = Recorder()
+        let key = holder(recorder)
+        key.release() // not held: nothing to lift
+        #expect(recorder.events.isEmpty)
+        key.update(pressed: true)
+        key.release() // e.g. the puck disconnected mid-press
+        #expect(recorder.events == [.down(isRepeat: false), .up])
+        #expect(!key.isPressed)
+    }
+
+    @MainActor @Test func autoRepeatsWhileHeldAndStopsOnRelease() {
+        let recorder = Recorder()
+        let key = holder(recorder, delay: 0.05, interval: 0.03)
+        key.update(pressed: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+        key.update(pressed: false)
+        let count = recorder.events.count
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        #expect(recorder.events.first == .down(isRepeat: false))
+        #expect(recorder.events.last == .up)
+        let repeats = recorder.events.dropFirst().dropLast()
+        #expect(repeats.count >= 2)
+        #expect(repeats.allSatisfy { $0 == .down(isRepeat: true) })
+        #expect(recorder.events.count == count) // nothing after the key went up
+    }
+}
+
+@Suite struct PressModeConfigTests {
+    @Test func arrowsDefaultToPress() {
+        let actions = Config().resolve().actions
+        for button in [Button.up, .down, .left, .right] {
+            #expect(actions[button]?.press?.name == button.rawValue)
+            #expect(actions[button]?.tap == nil)
+        }
+        #expect(actions[.plus]?.press == nil)
+        #expect(actions[.plus]?.hold?.name == "k")
+    }
+
+    @Test func pressWinsOverTapAndIsReported() {
+        let resolved = Config(buttons: ["left": ButtonAction(tap: "a", press: "left")]).resolve()
+        #expect(resolved.actions[.left]?.press?.name == "left")
+        #expect(resolved.actions[.left]?.tap == nil)
+        #expect(resolved.errors.contains { $0.contains("buttons.left") && $0.contains("press") })
+    }
+
+    @Test func unknownPressKeyIsReported() {
+        let errors = Config(buttons: ["left": ButtonAction(press: "lft")]).resolve().errors
+        #expect(errors.contains { $0.contains("buttons.left.press") })
+    }
+
+    @Test func oldTapConfigStillWorks() throws {
+        let config = try JSONDecoder().decode(Config.self, from: Data(#"{"buttons":{"left":{"tap":"left"}}}"#.utf8))
+        let left = config.resolve().actions[.left]
+        #expect(left?.tap?.name == "left")
+        #expect(left?.hold?.name == "left")
+        #expect(left?.press == nil)
+    }
+
+    @Test func pressIsWrittenOnlyWhereUsed() throws {
+        let json = String(decoding: try JSONEncoder().encode(Config()), as: UTF8.self)
+        #expect(json.contains(#""left":{"press":"left"}"#))
+        #expect(!json.contains(#""tap":null"#))
+        #expect(try JSONDecoder().decode(Config.self, from: Data(json.utf8)) == Config())
+    }
+}
+
 @Suite(.serialized) struct InstanceLockTests {
     private func tempLockPath() -> String {
         (NSTemporaryDirectory() as NSString).appendingPathComponent("zc2-lock-\(UUID().uuidString).lock")

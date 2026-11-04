@@ -13,7 +13,8 @@ Successor of [zwift-click-contoller](https://github.com/Valerii/zwift-click-cont
   - Left puck: `up`, `down`, `left`, `right`, `minus`
   - Right puck: `y`, `z`, `b`, `a`, `plus`
 - Every log line says which controller it came from (`[Click v1]`, `[Click v2 left]`, `[Click v2 right]`)
-- Tap vs. hold detection per button, with auto-repeat while held
+- Arrow buttons act like real held keyboard keys (e.g. steering keeps going while you hold left/right)
+- Tap vs. hold detection for the other buttons, with auto-repeat while held
 - Pressing several buttons at once works
 - Each controller reconnects independently - if one sleeps or drops, the others keep working
 - Warns when the left puck looks "locked" (see [Known Behavior](#left-puck-lock))
@@ -52,12 +53,12 @@ creates `~/.config/zwift-click-v2/config.json` (it never overwrites an existing 
   "buttons" : {
     "a" :     { "tap" : "return" },
     "b" :     { "tap" : "escape" },
-    "down" :  { "tap" : "down" },
-    "left" :  { "tap" : "left" },
+    "down" :  { "press" : "down" },
+    "left" :  { "press" : "left" },
     "minus" : { "hold" : "i", "tap" : "i" },
     "plus" :  { "hold" : "k", "tap" : "k" },
-    "right" : { "tap" : "right" },
-    "up" :    { "tap" : "up" },
+    "right" : { "press" : "right" },
+    "up" :    { "press" : "up" },
     "y" :     { "tap" : "space" },
     "z" :     { "tap" : "tab" }
   },
@@ -67,16 +68,35 @@ creates `~/.config/zwift-click-v2/config.json` (it never overwrites an existing 
   ],
   "holdRepeatInterval" : 0.2,
   "holdThreshold" : 0.3,
-  "watchApp" : "com.whoosh.whooshgame" 
+  "watchApp" : null
 }
 ```
 
 `plus`/`minus` default to `k`/`i`, MyWhoosh's shift up/down keys. The Click v1's `+`/`-` use the same `plus`/`minus` entries as the Click v2.
 
+### Button modes: `press` vs. `tap`/`hold`
+
+Each button uses one of two modes:
+
+| Mode | Behaves like | Good for |
+|---|---|---|
+| `{ "press": "left" }` | A real keyboard key: goes down when you press the button, stays down while you hold it (with your Mac's normal key repeat), goes up when you let go | Steering, scrolling - anything where the app checks whether a key is *held*. Default for `up`, `down`, `left`, `right` |
+| `{ "tap": "k", "hold": "k" }` | Separate clicks: one on a short press, then one every `holdRepeatInterval` while held past `holdThreshold` | Shifting, menu actions - one action per click. Default for the other buttons |
+
+If a button has both, `press` wins and a config error is logged. The log shows one line when a `press` key goes down and one when it goes up:
+
+```
+15:30:02.110 [Click v2 left] left  down -> left
+15:30:03.540 [Click v2 left] left  up   (1.4s)
+```
+
+**Config from an older version?** It has `"left": { "tap": "left" }` etc., which still works but sends separate clicks while held. Change `"tap"` to `"press"` for the four arrows to get a real held key, then restart.
+
 ### Config fields
 
 | Field | Default | Description |
 |---|---|---|
+| `buttons.<name>.press` | arrows | Key held down for as long as the button is (see [Button modes](#button-modes-press-vs-taphold)) |
 | `buttons.<name>.tap` | see above | Key sent on a short press. `null` = do nothing |
 | `buttons.<name>.hold` | same as `tap` | Key sent when held past `holdThreshold`, repeated every `holdRepeatInterval` |
 | `controllers` | `["v1", "v2"]` | Controller versions to use: `"v1"`, `"v2"`, or both. See below |
@@ -236,7 +256,7 @@ If the replaced copy was the LaunchAgent, it stays stopped until your next login
 
 ### Quitting releases the controllers
 
-On `Ctrl+C` or `launchctl unload`, ZwiftClickV2 disconnects every controller before exiting, so they are free for Zwift or another app straight away. Press `Ctrl+C` twice to quit immediately.
+On `Ctrl+C` or `launchctl unload`, ZwiftClickV2 disconnects every controller before exiting, so they are free for Zwift or another app straight away. Any key held by a `press` button is let go first; the same happens when a controller disconnects mid-press, so a key never stays stuck down. The one exception is a force kill (`kill -9`) while a button is held: macOS then keeps that key down until you press it once on the keyboard. Press `Ctrl+C` twice to quit immediately.
 
 ### Controller not found after 1 minute
 
