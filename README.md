@@ -225,15 +225,23 @@ Press `Ctrl+C` to quit.
 
 ### Left puck lock
 
-Reports from other projects ([BikeControl #68](https://github.com/jonasbark/swiftcontrol/issues/68)) say the left puck stops sending button events about a minute after connecting, unless the Click v2 was connected to the official Zwift app within the last ~24 hours. The right puck is not affected.
+The left puck can lock itself: it stays connected (battery and debug messages keep coming) but stops sending button events. The right puck is never affected. This matches reports from other projects ([BikeControl #68](https://github.com/jonasbark/swiftcontrol/issues/68)).
 
-This has **not** been reproduced on firmware 1.0.2: both pucks kept working for several minutes. If it does happen, ZwiftClickV2 detects it (the left puck stops relaying right-puck presses, see below) and logs:
+What debug runs showed (November 2026):
+
+- A locked left puck stops sending button events **within ~16-46 seconds** of connecting, while staying connected (battery and debug messages keep coming). The right puck is never affected.
+- **The lock is a hardware gate that only the official Zwift app clears.** No third-party project (my-zwift-click, zwiftboard, BikeControl) has a software unlock. Re-sending the handshake, reconnecting, a battery pull, and the `RideOn` keepalive all failed to clear it on real hardware. The left puck also sends a `0xff` challenge whose field 1 is a 33-byte EC public key; answering it would require Zwift's keys.
+- In testing, even a fresh Zwift unlock did **not** give a lasting result here: the puck stayed up for only ~16 s before going quiet again. Whether an unlock sticks seems to depend on firmware and on doing the full Zwift ritual (keep it connected ~30 s and press a button inside Zwift).
+
+ZwiftClickV2 detects a left puck that locks mid-session and logs:
 
 ```
 ⚠️  The Click v2 left puck seems to have stopped sending button events ...
 ```
 
-To unlock: open the Zwift app (desktop or mobile, not Companion), log in (no subscription needed), connect your trainer and the Click v2, keep it connected for ~30 seconds, then quit Zwift completely.
+This fires when the left puck stops relaying right-puck presses (see below), so it needs a few right-puck presses to notice.
+
+To unlock: open the Zwift app (desktop or mobile, not Companion), log in (no subscription needed), connect your trainer and the Click v2, keep it connected for ~30 seconds, **press a Click button inside Zwift**, then quit Zwift completely. Reports say an unlock then lasts about a day. If an unlock doesn't stick, map the buttons you rely on to the right puck, which never locks.
 
 ### Firmware updates
 
@@ -274,10 +282,10 @@ Observed on firmware 1.0.2. Unlike v1, there is no encryption.
 |---|---|
 | Advertising | Each puck is a separate peripheral named "Zwift Click", advertising service `FC82`. Manufacturer data `4a 09 <type> ...` - company `0x094A` (Zwift), type `0x0B` = left, `0x0A` = right |
 | Characteristics | `00000002-19ca-4651-86e5-fa29dcdd09d1` async (notify) · `...0003` sync-rx (write without response) · `...0004` sync-tx (indicate) |
-| Handshake | Subscribe to async + sync-tx, write `RideOn` + `02 03` to sync-rx; the puck echoes it on sync-tx |
+| Handshake | Subscribe to async + sync-tx, write `RideOn 02 03` to sync-rx; the puck echoes `RideOn` on sync-tx. Then write `00 08 00` and `00 08 10` to sync-rx, and write a bare `RideOn` keepalive every 3 s - without these the puck goes idle and stops sending events after ~1 min |
 | Buttons | `0x23` + protobuf; field 1 is a bitmap where a **0** bit means pressed: left `0x001`, up `0x002`, right `0x004`, down `0x008`, a `0x010`, b `0x020`, y `0x040`, z `0x080`, minus `0x100`, plus `0x1000` |
 | Relay | The left puck also reports the right puck's bits (~20-30 ms later). ZwiftClickV2 only takes each puck's own buttons, so presses never fire twice - and uses the relay to detect a locked left puck |
-| Other | `0x19` battery (`19 10 64` = 100%), `0x2a` debug log text every ~5 s, `0xff` pairing data - ignored |
+| Other | `0x19` battery (`19 10 64` = 100%), `0x2a` debug log text every ~5 s, `0xff` challenge from the left puck (field 1 = 33-byte EC public key, answered only by the Zwift app) - ignored |
 
 ### Click v1
 

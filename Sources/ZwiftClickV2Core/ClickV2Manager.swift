@@ -18,6 +18,8 @@ public final class ClickV2Manager: NSObject, CBCentralManagerDelegate, CBPeriphe
         // Click v1
         let keyExchange = ZapKeyExchange()
         var crypto: ZapCrypto?
+        // Click v2: keeps the puck sending button events (see ZwiftProtocol.keepalive).
+        var keepaliveTimer: Timer?
 
         init(kind: DeviceKind, peripheral: CBPeripheral) {
             self.kind = kind
@@ -302,6 +304,8 @@ public final class ClickV2Manager: NSObject, CBCentralManagerDelegate, CBPeriphe
     /// Forgets a device and abandons its in-flight presses so no key keeps repeating.
     private func drop(_ device: Device) {
         device.kind.buttons.forEach { trackers[TrackerKey(kind: device.kind, button: $0)]?.release() }
+        device.keepaliveTimer?.invalidate()
+        device.keepaliveTimer = nil
         devices[device.kind] = nil
         if device.kind == .clickV2Left { resetWatchdog() }
     }
@@ -437,11 +441,37 @@ public final class ClickV2Manager: NSObject, CBCentralManagerDelegate, CBPeriphe
             Log.info("Click v1 ready. Listening for button events.")
             return
         }
+        startKeepalive(device)
         Log.info("\(device.name) ready.")
         if let left = devices[.clickV2Left], let right = devices[.clickV2Right], left.ready, right.ready {
             Log.info("Click v2: both pucks ready. Listening for button events.")
         }
     }
+
+    /// The left puck reports whether it is locked right after the handshake. A locked puck stays connected
+    /// but sends no button events until unlocked via the Zwift app - reconnecting does not help. It does not
+    /// report again if it locks mid-session; the relay watchdog (`checkRelay`) catches that.
+    /// Completes the Click v2 handshake and keeps the puck awake. After the "RideOn" echo the pucks need
+    /// two more sync-rx writes and a periodic keepalive, or they stop sending button events after ~1 min
+    /// (the left puck sooner). No effect on the Click v1, which uses its own encrypted keepalive-free link.
+    private func startKeepalive(_ device: Device) {
+        guard device.kind != .clickV1, let syncRx = device.syncRx else { return }
+        let write: ([UInt8]) -> Void = { device.peripheral.writeValue(Data($0), for: syncRx, type: .withoutResponse) }
+        write(ZwiftProtocol.handshakeInfo)
+        write(ZwiftProtocol.handshakeStableState)
+        device.keepaliveTimer?.invalidate()
+        device.keepaliveTimer = Timer.scheduledTimer(withTimeInterval: ZwiftProtocol.keepaliveInterval,
+                                                     repeats: true) { [weak self, weak device] _ in
+            guard let self, let device, self.devices[device.kind] === device,
+                  let syncRx = device.syncRx else { return }
+            device.peripheral.writeValue(Data(ZwiftProtocol.keepalive), for: syncRx, type: .withoutResponse)
+        }
+    }
+
+    private static let unlockAdvice = """
+        To unlock: open the Zwift app, connect the Click v2 for ~30s, then quit Zwift. \
+        The right puck keeps working meanwhile.
+        """
 
     private func report(battery level: Int, of device: Device) {
         guard device.battery != level else { return }
@@ -493,12 +523,9 @@ public final class ClickV2Manager: NSObject, CBCentralManagerDelegate, CBPeriphe
                 self.missedRelays += 1
                 if self.missedRelays >= self.missedRelaysBeforeWarning, !self.lockWarned {
                     self.lockWarned = true
-                    Log.info("""
-                        ⚠️  The Click v2 left puck seems to have stopped sending button events (it is connected but \
-                        did not relay the last \(self.missedRelays) right-puck presses). The Click v2 may need \
-                        an unlock: open the Zwift app, connect the Click v2 for ~30s, then quit Zwift. \
-                        The right puck keeps working meanwhile.
-                        """)
+                    Log.info("⚠️  The Click v2 left puck seems to have stopped sending button events (it is connected "
+                             + "but did not relay the last \(self.missedRelays) right-puck presses), most likely locked. "
+                             + Self.unlockAdvice)
                 }
             }
         }
