@@ -7,6 +7,9 @@ import Foundation
 // - Unencrypted: write "RideOn" 02 03 to sync-rx (write-without-response); the puck echoes it on sync-tx.
 // - Button events on async: 0x23 + protobuf, field 1 = button bitmap where a 0 bit means "pressed".
 // - The left puck also relays the right puck's button bits (~20-30 ms later).
+// - Left puck only: right after the handshake it sends a 0x2a status whose nested field 5 looked like a
+//   lock flag: 0 while its buttons worked, 251 while they were dead (it then wants a Zwift app unlock).
+//   It also sends 0xff challenges (field 1 = 33-byte EC public key) that only the Zwift app answers.
 //
 // Zwift Click v1 (one device, + and - buttons), as used by the v1 app on real hardware:
 // - Named "Zwift Click", advertising service 00000001-19CA-..., manufacturer type 0x09.
@@ -160,6 +163,14 @@ public enum Message: Equatable, Sendable {
 public enum ZwiftProtocol {
     public static let handshake: [UInt8] = Array("RideOn".utf8) + [0x02, 0x03]
     static let rideOnPrefix: [UInt8] = Array("RideOn".utf8)
+    /// Click v2 handshake continuation, written to sync-rx right after the "RideOn" echo. Without these
+    /// (and the keepalive below) the pucks go idle and stop sending button events after ~1 min - the left
+    /// one noticeably sooner. Observed in every other Zwift Click project (my-zwift-click, zwiftboard).
+    public static let handshakeInfo: [UInt8] = [0x00, 0x08, 0x00]
+    public static let handshakeStableState: [UInt8] = [0x00, 0x08, 0x10]
+    /// Bare "RideOn", written to sync-rx every ~3s to keep a Click v2 puck sending events.
+    public static let keepalive: [UInt8] = rideOnPrefix
+    public static let keepaliveInterval: TimeInterval = 3
     static let buttonMessageType: UInt8 = 0x23
     static let batteryMessageType: UInt8 = 0x19
     static let v1ButtonMessageType: UInt8 = 0x37
